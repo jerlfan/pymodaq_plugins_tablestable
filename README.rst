@@ -1,99 +1,46 @@
-pymodaq_plugins_template
-########################
+pymodaq_plugins_tablestable
+###########################
 
-.. the following must be adapted to your developed package, links to pypi, github  description...
-
-.. image:: https://img.shields.io/pypi/v/pymodaq_plugins_template.svg
-   :target: https://pypi.org/project/pymodaq_plugins_template/
+.. image:: https://img.shields.io/pypi/v/pymodaq_plugins_tablestable.svg
+   :target: https://pypi.org/project/pymodaq_plugins_tablestable/
    :alt: Latest Version
 
-.. image:: https://readthedocs.org/projects/pymodaq/badge/?version=latest
-   :target: https://pymodaq.readthedocs.io/en/stable/?badge=latest
-   :alt: Documentation Status
+.. image:: https://github.com/jerlfan/pymodaq_plugins_tablestable/actions/workflows/tests.yml/badge.svg
+   :target: https://github.com/jerlfan/pymodaq_plugins_tablestable/actions/workflows/tests.yml
+   :alt: Tests
 
-.. image:: https://github.com/PyMoDAQ/pymodaq_plugins_template/workflows/Upload%20Python%20Package/badge.svg
-   :target: https://github.com/PyMoDAQ/pymodaq_plugins_template
-   :alt: Publication Status
+PyMoDAQ plugins for instruments of The Table Stable Ltd. (formerly JRS Scientific Instruments). The TFP-1 tandem
+Fabry-Perot interferometer is read through the serial output of its control unit (GHOST protocol), so that Brillouin
+spectra can be acquired, accumulated and mapped within PyMoDAQ.
 
-.. image:: https://github.com/PyMoDAQ/pymodaq_plugins_template/actions/workflows/Test.yml/badge.svg
-    :target: https://github.com/PyMoDAQ/pymodaq_plugins_template/actions/workflows/Test.yml
-
-
-Use this template to create a repository on your account and start the development of your own PyMoDAQ plugin!
-
-This branch targets **PyMoDAQ 5.3.x** (Python 3.10 to 3.13). Use the branch matching your PyMoDAQ version.
+This branch targets **PyMoDAQ 5.3.x** (Python 3.10 to 3.13).
 
 Authors
 =======
 
-* First Author  (myemail@xxx.org)
-* Other author (myotheremail@xxx.org)
-
-.. if needed use this field
-
-    Contributors
-    ============
-
-    * First Contributor
-    * Other Contributors
-
-.. if needed use this field
-
-  Depending on the plugin type, delete/complete the fields below
-
+* Jérémie Margueritat (jeremie.margueritat@univ-lyon1.fr)
 
 Instruments
 ===========
 
-Below is the list of instruments included in this plugin
-
-Actuators
-+++++++++
-
-* **yyy**: control of yyy actuators
-* **xxx**: control of xxx actuators
-
-Viewer0D
-++++++++
-
-* **yyy**: control of yyy 0D detector
-* **xxx**: control of xxx 0D detector
-
 Viewer1D
 ++++++++
 
-* **yyy**: control of yyy 1D detector
-* **xxx**: control of xxx 1D detector
-
-
-Viewer2D
-++++++++
-
-* **yyy**: control of yyy 2D detector
-* **xxx**: control of xxx 2D detector
-
-
-PID Models
-==========
-
-
-Extensions
-==========
-
+* **TFP1**: Brillouin spectra of a TFP-1 tandem Fabry-Perot interferometer, read from the GHOST serial output of
+  its control unit
 
 Installation instructions
 =========================
 
-* PyMoDAQ’s version.
-* Operating system’s version.
-* What manufacturer’s drivers should be installed to make this plugin run?
-
+* PyMoDAQ 5.3.x on Windows.
+* No manufacturer driver is needed: the plugin reads the RS-232 output of the TFP-1 control unit (57600 baud, 8N1)
+  with ``pyserial``.
+* The link is one-way: the control unit only sends data, so the plugin cannot change any setting of the
+  interferometer. The GHOST software can keep running on a second serial port connected through a Y cable.
 
 Development
 ===========
 
-* Install your plugin in editable mode: ``pip install -e .``
+* Install the plugin in editable mode: ``pip install -e .``
 * Check it, without any hardware: ``check_plugin`` (and ``pytest``)
-* If you use an AI coding assistant, point it to ``AGENTS.md``: it describes the patterns to follow for instrument
-  plugins, Dashboard extensions (``CustomExt``, whenever instruments are involved) and standalone apps
-  (``CustomApp``, only if no instruments are needed).
+* If you use an AI coding assistant, point it to ``AGENTS.md``.
