@@ -1,6 +1,8 @@
 from pathlib import Path
+import time
 
 import numpy as np
+from qtpy import QtCore
 
 from pymodaq_utils.config import GlobalConfig
 from pymodaq_utils.utils import ThreadCommand
@@ -14,6 +16,7 @@ from pymodaq_plugins_tablestable.hardware.ghost import TFP1Ghost, ReplayPort
 
 config = GlobalConfig()
 REPLAY_FILE = Path(__file__).parents[2].joinpath('resources', 'tfp1_replay.bin')
+SCAN_TIMEOUT = 5.  # s, much longer than a scan cycle (about 0.7 s for 512 channels)
 
 
 class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
@@ -51,6 +54,10 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     def ini_attributes(self):
         self.controller: TFP1Ghost = None
         self.x_axis: Axis = None
+        self._grab_start = 0.
+        self._timer = QtCore.QTimer()  # checks every 50 ms whether a scan is complete, during an acquisition
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._check_scan)
 
     def ini_detector(self, controller=None):
         """Detector communication initialization
@@ -86,7 +93,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         self.x_axis = Axis('Channel', units='', data=np.arange(scan.n_channels), index=0)
         self.dte_signal_temp.emit(DataToExport('TFP1', data=[
             DataFromPlugins(name='TFP1', data=[np.zeros(scan.n_channels)], dim='Data1D',
-                            labels=['Spectrum'], axes=[self.x_axis])]))
+                            labels=['Spectrum'], units='count', axes=[self.x_axis])]))
         return f'{scan.n_channels} channels, {"tandem" if scan.tandem else "alignment"} mode', True
 
     def close(self):
@@ -106,33 +113,35 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         kwargs: dict
             others optionals arguments
         """
-        ## TODO for your custom plugin: you should choose EITHER the synchrone or the asynchrone version following
+        self.controller.restart()  # the scan returned will be the first one starting after this call
+        self._grab_start = time.monotonic()
+        self._timer.start()
 
-        ##synchrone version (blocking function)
-        data_tot = self.controller.your_method_to_start_a_grab_snap()
-        self.dte_signal.emit(DataToExport('myplugin',
-                                          data=[DataFromPlugins(name='Mock1', data=data_tot,
-                                                                dim='Data1D', labels=['dat0', 'data1'],
-                                                                axes=[self.x_axis])]))
+    def _check_scan(self):
+        """Called by the timer during an acquisition: emit the first complete scan, or give up after a timeout"""
+        scans = self.controller.read_scans()
+        if scans:
+            self._timer.stop()
+            self._emit_scan(scans[0])
+        elif time.monotonic() - self._grab_start > SCAN_TIMEOUT:
+            self._timer.stop()
+            self.emit_status(ThreadCommand('Update_Status',
+                                           [f'No complete scan within {SCAN_TIMEOUT} s: is the TFP-1 scanning?']))
 
-        ##asynchrone version (non-blocking function with callback)
-        self.controller.your_method_to_start_a_grab_snap(self.callback)
-        #########################################################
-
-    def callback(self):
-        """optional asynchrone method called when the detector has finished its acquisition of data"""
-        data_tot = self.controller.your_method_to_get_data_from_buffer()
-        self.dte_signal.emit(DataToExport('myplugin',
-                                          data=[DataFromPlugins(name='Mock1', data=data_tot,
-                                                                dim='Data1D', labels=['dat0', 'data1'])]))
+    def _emit_scan(self, scan):
+        """Emit one scan as a spectrum, the channels of the shutter windows divided by the window factor"""
+        if scan.n_channels != self.x_axis.size:  # the number of channels was changed on the control unit
+            self.settings.child('n_channels').setValue(scan.n_channels)
+            self.x_axis = Axis('Channel', units='', data=np.arange(scan.n_channels), index=0)
+        spectrum = scan.counts.astype(float)
+        spectrum[scan.shutter] /= self.settings['window_factor']
+        self.dte_signal.emit(DataToExport('TFP1', data=[
+            DataFromPlugins(name='TFP1', data=[spectrum], dim='Data1D', labels=['Spectrum'], units='count',
+                            axes=[self.x_axis])]))
 
     def stop(self):
-        """Stop the current grab hardware wise if necessary"""
-        ## TODO for your custom plugin
-        raise NotImplementedError  # when writing your own plugin remove this line
-        self.controller.your_method_to_stop_acquisition()  # when writing your own plugin replace this line
-        self.emit_status(ThreadCommand('Update_Status', ['Some info you want to log']))
-        ##############################
+        """Stop the current acquisition: nothing to tell the control unit, which keeps scanning"""
+        self._timer.stop()
         return ''
 
     def commit_settings(self, param: Parameter):
@@ -143,11 +152,10 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         param: Parameter
             A given parameter (within detector_settings) whose value has been changed by the user
         """
-        ## TODO for your custom plugin
-        if param.name() == "a_parameter_you've_added_in_self.params":
-           self.controller.your_method_to_apply_this_param_change()
-#        elif ...
-        ##
+        # the window factor is read at each scan, nothing to do for it
+        if param.name() == 'port':
+            self.emit_status(ThreadCommand('Update_Status', ['The new serial port will be used at the next '
+                                                             'initialization']))
 
 
 if __name__ == '__main__':
