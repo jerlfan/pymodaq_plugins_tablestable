@@ -6,26 +6,24 @@ h5exporters = false  # true if plugin contains custom h5 file exporters
 scanners = false  # true if plugin contains custom scan layout (daq_scan extensions)
 
 [urls]
-package-url = 'https://github.com/PyMoDAQ/pymodaq_plugins_template' #todo modify url by your plugin url
+package-url = 'https://github.com/jerlfan/pymodaq_plugins_tablestable'
 
 [project]
-name = "pymodaq_plugins_template" #todo modify template by your plugin short name
-description = 'some word about your plugin'
+name = "pymodaq_plugins_tablestable"
+description = 'TFP-1 tandem Fabry-Perot interferometer (The Table Stable, JRS) read through its GHOST serial output'
 dependencies = [
     "pymodaq>=5.3.7",
     "pymodaq_utils>=5.3.1",
     "pymodaq_gui>=5.3.0",
     "pymodaq_data>=5.3.0",
-    #todo: list here all dependencies your package may have
+    "pyserial",
 ]
 
 authors = [
-    {name = "Name Surname", email = "myname@test.fr"},
-    #todo: list here all authors of your plugin
+    {name = "Jérémie Margueritat", email = "jeremie.margueritat@univ-lyon1.fr"},
 ]
 maintainers = [
-    {name = "Name Surname", email = "myname@test.fr"},
-    #todo: list here all maintainers of your plugin
+    {name = "Jérémie Margueritat", email = "jeremie.margueritat@univ-lyon1.fr"},
 ]
 
 # nottodo: leave everything below as is!
