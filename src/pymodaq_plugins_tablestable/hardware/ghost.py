@@ -101,21 +101,26 @@ class GhostDecoder:
 
 
 class ReplayPort:
-    """Serial-like object replaying a recording of the GHOST output at the real data rate (57600 baud), in a loop.
+    """Serial-like object replaying a recording of the GHOST output, in a loop, with the timing of the instrument.
 
+    The bytes of a scan come at the rate of the serial link (57600 baud) and the idle characters of the retrace every
+    ``idle_interval`` seconds (about 10 ms on the TFP-1 tested, so that a cycle lasts about 0.7 s for 512 channels).
     It has the methods of ``serial.Serial`` used by :class:`TFP1Ghost`, so that the plugin can be developed and tested
     without the instrument.
     """
 
-    def __init__(self, path: Union[str, Path]):
-        self._data = Path(path).read_bytes()
-        self._bytes_per_second = BAUDRATE / 10  # 10 bits per byte (start, 8 data, stop)
+    def __init__(self, path: Union[str, Path], idle_interval: float = 0.01):
+        self._data = np.frombuffer(Path(path).read_bytes(), dtype=np.uint8)
+        byte_time = 10 / BAUDRATE  # 10 bits per byte (start, 8 data, stop)
+        self._times = np.cumsum(np.where(self._data == IDLE, idle_interval, byte_time))  # arrival of each byte
         self._start = time.monotonic()
         self._delivered = 0
         self.is_open = True
 
     def _available_total(self) -> int:
-        return int((time.monotonic() - self._start) * self._bytes_per_second)
+        """Number of bytes sent since the start of the replay"""
+        loops, t = divmod(time.monotonic() - self._start, self._times[-1])
+        return int(loops) * len(self._data) + int(np.searchsorted(self._times, t, side='right'))
 
     @property
     def in_waiting(self) -> int:
@@ -123,10 +128,9 @@ class ReplayPort:
 
     def read(self, size: int = 1) -> bytes:
         size = min(size, self.in_waiting)
-        n = len(self._data)
-        chunk = bytes(self._data[(self._delivered + i) % n] for i in range(size))
+        indexes = np.arange(self._delivered, self._delivered + size) % len(self._data)
         self._delivered += size
-        return chunk
+        return self._data[indexes].tobytes()
 
     def reset_input_buffer(self):
         self._delivered = self._available_total()
@@ -168,13 +172,17 @@ class TFP1Ghost:
         return valid
 
     def restart(self):
-        """Drop what was received so far: the next scan returned by ``read_scans`` starts after this call.
+        """Make sure that the next scan returned by ``read_scans`` starts after this call.
 
-        Used before an acquisition that must only contain scans taken after a given moment (a point of a map, once the
-        stage has stopped).
+        What was received so far is decoded and dropped: the completed scans, and the scan in progress if any. During
+        the retrace nothing is lost: the next scan has not started yet, so it will be returned. Used before each
+        acquisition, so that a point of a map only contains scans started once the stage has stopped.
         """
-        self._port.reset_input_buffer()
-        self._decoder.reset()
+        n = self._port.in_waiting
+        if n:
+            self._decoder.feed(self._port.read(n))
+        if self._decoder.state == 'scan':
+            self._decoder.reset()
 
     def wait_scan(self, timeout: float = 10.) -> Scan:
         """Return the next valid scan, or raise ``TimeoutError`` if none arrives within ``timeout`` seconds.
