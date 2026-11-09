@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import numpy as np
 
+from pymodaq_utils.config import GlobalConfig
 from pymodaq_utils.utils import ThreadCommand
 from pymodaq_data.data import DataToExport, Axis
 from pymodaq_gui.parameter import Parameter
@@ -7,10 +10,10 @@ from pymodaq_gui.parameter import Parameter
 from pymodaq.control_modules.viewer_utility_classes import DAQ_Viewer_base, comon_parameters, main
 from pymodaq.utils.data import DataFromPlugins
 
-#  TODO:
-#  Replace the following fake import with the import of the real Python wrapper of your instrument. Here we suppose that
-#  the wrapper is in the hardware directory, but it could come from an external librairy like pylablib or pymeasure.
-from pymodaq_plugins_template.hardware.python_wrapper_file_of_your_instrument import PythonWrapperObjectOfYourInstrument
+from pymodaq_plugins_tablestable.hardware.ghost import TFP1Ghost, ReplayPort
+
+config = GlobalConfig()
+REPLAY_FILE = Path(__file__).parents[2].joinpath('resources', 'tfp1_replay.bin')
 
 
 class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
@@ -35,20 +38,19 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     # TODO add your particular attributes here if any
 
     """
-    params = comon_parameters+[
-        ## TODO for your custom plugin
-        # elements to be added here as dicts in order to control your custom stage
-        ############
-        ]
+    params = comon_parameters + [
+        {'title': 'Serial port:', 'name': 'port', 'type': 'str', 'value': config('tablestable', 'tfp1', 'port'),
+         'tip': 'Serial port receiving the GHOST output (COM6...), MOCK to replay a recording'},
+        {'title': 'Window factor:', 'name': 'window_factor', 'type': 'float',
+         'value': config('tablestable', 'tfp1', 'window_factor'), 'min': 1.,
+         'tip': 'The channels of the shutter windows (reference beam) are divided by this factor'},
+        {'title': 'Channels:', 'name': 'n_channels', 'type': 'int', 'value': 0, 'readonly': True,
+         'tip': 'Number of channels per scan, read from the data'},
+    ]
 
     def ini_attributes(self):
-        #  TODO declare the type of the wrapper (and assign it to self.controller) you're going to use for easy
-        #  autocompletion
-        self.controller: PythonWrapperObjectOfYourInstrument = None
-
-        # TODO declare here attributes you want/need to init with a default value
-
-        self.x_axis = None
+        self.controller: TFP1Ghost = None
+        self.x_axis: Axis = None
 
     def ini_detector(self, controller=None):
         """Detector communication initialization
@@ -66,40 +68,32 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
             False if initialization failed otherwise True
         """
 
-        raise NotImplementedError  # TODO when writing your own plugin remove this line and modify the one below
         if self.is_master:
-            self.controller = PythonWrapperObjectOfYourInstrument()  #instantiate you driver with whatever arguments are needed
-            self.controller.open_communication() # call eventual methods
-            initialized = self.controller.a_method_or_atttribute_to_check_if_init()  # TODO
+            port = ReplayPort(REPLAY_FILE) if self.settings['port'] == 'MOCK' else self.settings['port']
+            self.controller = TFP1Ghost(port)
         else:
             self.controller = controller
-            initialized = True
 
-        ## TODO for your custom plugin
-        # get the x_axis (you may want to to this also in the commit settings if x_axis may have changed
-        data_x_axis = self.controller.your_method_to_get_the_x_axis()  # if possible
-        self.x_axis = Axis(data=data_x_axis, label='', units='', index=0)
+        try:
+            scan = self.controller.wait_scan(timeout=5.)
+        except TimeoutError as e:
+            if self.is_master:  # free the port, so that a new initialization can open it again
+                self.controller.close()
+                self.controller = None
+            return str(e), False
 
-        # TODO for your custom plugin. Initialize viewers pannel with the future type of data
-        self.dte_signal_temp.emit(DataToExport(name='myplugin',
-                                               data=[DataFromPlugins(name='Mock1',
-                                                                     data=[np.array([0., 0., ...]),
-                                                                           np.array([0., 0., ...])],
-                                                                     dim='Data1D', labels=['Mock1', 'label2'],
-                                                                     axes=[self.x_axis])]))
-
-        info = "Whatever info you want to log"
-        return info, initialized
+        self.settings.child('n_channels').setValue(scan.n_channels)
+        self.x_axis = Axis('Channel', units='', data=np.arange(scan.n_channels), index=0)
+        self.dte_signal_temp.emit(DataToExport('TFP1', data=[
+            DataFromPlugins(name='TFP1', data=[np.zeros(scan.n_channels)], dim='Data1D',
+                            labels=['Spectrum'], axes=[self.x_axis])]))
+        return f'{scan.n_channels} channels, {"tandem" if scan.tandem else "alignment"} mode', True
 
     def close(self):
         """Terminate the communication protocol"""
-        ## TODO for your custom plugin
-        raise NotImplementedError  # when writing your own plugin remove this line
-        # only the master owns the controller (a slave must not close the shared one) and ini_stage/ini_detector may
-        # have failed before creating it, so close can be called while self.controller is still None
+        # only the master owns the controller, and ini_detector may have failed before creating it
         if self.is_master and self.controller is not None:
-            #  self.controller.your_method_to_terminate_the_communication()  # when writing your own plugin replace this line
-            ...
+            self.controller.close()
 
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
