@@ -1,0 +1,11 @@
+# Everything is defined once in PyMoDAQ/pymodaq_plugins_template (reusable-*.yml). The template is never released, so the ref after @ is its 5.3.x branch.
+name: Upload Python Package
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish:
+    uses: PyMoDAQ/pymodaq_plugins_template/.github/workflows/reusable-publish.yml@5.3.x
+    secrets: inherit
