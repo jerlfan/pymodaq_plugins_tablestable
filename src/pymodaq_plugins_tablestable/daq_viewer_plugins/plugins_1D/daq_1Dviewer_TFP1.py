@@ -125,8 +125,8 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     def update_axis(self, n_channels: int):
         """Build the frequency axis, from -X to +X GHz with X = (c / 2 spacing) * (amplitude / wavelength)
 
-        The first channel is at -X and the last one at +X, as in GHOST, and the frequency increases with the channel
-        number.
+        As in GHOST, the zero frequency is on channel n_channels / 2 (kept there by the stabilisation of the reference
+        peak) and the step is 2X / (n_channels - 1).
         """
         frequency = self.settings.child('frequency')
         half_range = (ureg.speed_of_light / (2 * Q_(frequency['mirror_spacing'], 'mm'))
@@ -134,7 +134,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         frequency.child('half_range').setValue(half_range)
         self.settings.child('n_channels').setValue(n_channels)
         self.x_axis = Axis('Frequency', units='GHz', index=0,
-                           data=np.linspace(-half_range, half_range, n_channels))  # same convention as GHOST
+                              data=(np.arange(n_channels) - n_channels / 2) * 2 * half_range / (n_channels - 1))
         
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
