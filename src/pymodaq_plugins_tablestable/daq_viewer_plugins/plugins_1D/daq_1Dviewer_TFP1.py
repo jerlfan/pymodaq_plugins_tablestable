@@ -32,7 +32,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     Each acquisition returns the first complete scan starting after the request, in counts per channel, so that the
     scans of a point of a map are all taken once the stage has stopped. Averaging over several scans is left to
     PyMoDAQ (Naverage, live averaging). The channels of the shutter windows (reference beam) are divided by the window
-    factor, to keep the reference peak visible without crushing the spectrum.The spectrum is plotted on a frequency axis, from -X to +X GHz with X = (c / 2L) * (scan amplitude / wavelength), L being the mirror spacing; these three settings are kept in the user configuration file. With the port set to MOCK, the plugin
+    factor, to keep the reference peak visible without crushing the spectrum. The spectrum is plotted on a frequency axis, from -X to +X GHz with X = (c / 2L) * (scan amplitude / wavelength), L being the mirror spacing; these three settings are kept in the user configuration file. With the port set to MOCK, the plugin
     replays a recording shipped with the package, so that it can be used without the instrument.
 
     Compatible instruments: TFP-1 control units with the GHOST serial output. The TFP-2 should also work if its
@@ -125,8 +125,8 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     def update_axis(self, n_channels: int):
         """Build the frequency axis, from -X to +X GHz with X = (c / 2 spacing) * (amplitude / wavelength)
 
-        The zero frequency is in the middle of the scan (channel n_channels / 2), and the frequency increases with the
-        channel number.
+        The first channel is at -X and the last one at +X, as in GHOST, and the frequency increases with the channel
+        number.
         """
         frequency = self.settings.child('frequency')
         half_range = (ureg.speed_of_light / (2 * Q_(frequency['mirror_spacing'], 'mm'))
@@ -134,7 +134,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         frequency.child('half_range').setValue(half_range)
         self.settings.child('n_channels').setValue(n_channels)
         self.x_axis = Axis('Frequency', units='GHz', index=0,
-                           data=(np.arange(n_channels) - n_channels / 2) * 2 * half_range / n_channels)
+                           data=np.linspace(-half_range, half_range, n_channels))  # same convention as GHOST
         
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
