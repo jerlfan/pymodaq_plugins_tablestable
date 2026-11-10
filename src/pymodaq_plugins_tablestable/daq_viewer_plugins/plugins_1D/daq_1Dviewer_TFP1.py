@@ -32,14 +32,16 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     Each acquisition returns the first complete scan starting after the request, in counts per channel, so that the
     scans of a point of a map are all taken once the stage has stopped. Averaging over several scans is left to
     PyMoDAQ (Naverage, live averaging). The channels of the shutter windows (reference beam) are divided by the window
-    factor, to keep the reference peak visible without crushing the spectrum. With the port set to MOCK, the plugin
+    factor, to keep the reference peak visible without crushing the spectrum.The spectrum is plotted on a frequency axis, from -X to +X GHz with X = (c / 2L) * (scan amplitude / wavelength), L being the mirror spacing; these three settings are kept in the user configuration file. With the port set to MOCK, the plugin
     replays a recording shipped with the package, so that it can be used without the instrument.
 
-    Compatible instruments: TFP-1 control units with the GHOST serial output. The TFP-2 should also work if its control unit has the same output (untested).
+    Compatible instruments: TFP-1 control units with the GHOST serial output. The TFP-2 should also work if its
+    control unit has the same output (untested).
     Tested with: a TFP-1 in tandem mode (512 channels) on a native RS-232 port, PyMoDAQ 5.3.10, Python 3.12, Windows 11.
     Installation: no manufacturer driver is needed, only ``pyserial``. The serial port is set in the configuration file
     of the plugin (``config_tablestable.toml``, section ``[tfp1]``).
-    Usage: the plugin only reads the data. The user remains responsible for the alignment and interferometer, with the control uit and the software of the manufacturer.
+    Usage: the plugin only reads the data. The user remains responsible for the alignment and the stabilisation of the
+    interferometer, with the control unit and the software of the manufacturer.
 
     Attributes:
     -----------
