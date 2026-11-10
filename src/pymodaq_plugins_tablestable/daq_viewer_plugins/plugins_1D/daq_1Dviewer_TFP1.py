@@ -20,26 +20,31 @@ SCAN_TIMEOUT = 5.  # s, much longer than a scan cycle (about 0.7 s for 512 chann
 
 
 class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
-    """ Instrument plugin class for a 1D viewer.
-    
-    This object inherits all functionalities to communicate with PyMoDAQ’s DAQ_Viewer module through inheritance via
-    DAQ_Viewer_base. It makes a bridge between the DAQ_Viewer module and the Python wrapper of a particular instrument.
+    """PyMoDAQ 1D viewer for a TFP-1 tandem Fabry-Perot interferometer (The Table Stable, formerly JRS).
 
-    TODO Complete the docstring of your plugin with:
-        * The set of instruments that should be compatible with this instrument plugin.
-        * With which instrument it has actually been tested.
-        * The version of PyMoDAQ during the test.
-        * The version of the operating system.
-        * Installation instructions: what manufacturer’s drivers should be installed to make it run?
+    The plugin reads the photon counts that the control unit of the TFP-1 sends on its RS-232 output for the GHOST
+    software (one-way link, 57600 baud, 8N1, see ``hardware/ghost.py``). Nothing is sent to the control unit: the plugin
+    cannot change any setting of the interferometer, and GHOST can keep running on a second serial port connected
+    through a Y cable.
+
+    Each acquisition returns the first complete scan starting after the request, in counts per channel, so that the
+    scans of a point of a map are all taken once the stage has stopped. Averaging over several scans is left to
+    PyMoDAQ (Naverage, live averaging). The channels of the shutter windows (reference beam) are divided by the window
+    factor, to keep the reference peak visible without crushing the spectrum. With the port set to MOCK, the plugin
+    replays a recording shipped with the package, so that it can be used without the instrument.
+
+    Compatible instruments: TFP-1 control units with the GHOST serial output. The TFP-2 should also work if its control unit has the same output (untested).
+    Tested with: a TFP-1 in tandem mode (512 channels) on a native RS-232 port, PyMoDAQ 5.3.10, Python 3.12, Windows 11.
+    Installation: no manufacturer driver is needed, only ``pyserial``. The serial port is set in the configuration file
+    of the plugin (``config_tablestable.toml``, section ``[tfp1]``).
+    Usage: the plugin only reads the data. The user remains responsible for the alignment and interferometer, with the control uit and the software of the manufacturer.
 
     Attributes:
     -----------
-    controller: object
-        The particular object that allow the communication with the hardware, in general a python wrapper around the
-         hardware library.
-         
-    # TODO add your particular attributes here if any
-
+    controller: TFP1Ghost
+        Wrapper of the serial output of the control unit
+    x_axis: Axis
+        Channel axis, rebuilt when the number of channels is changed on the control unit
     """
     params = comon_parameters + [
         {'title': 'Serial port:', 'name': 'port', 'type': 'str', 'value': config('tablestable', 'tfp1', 'port'),
