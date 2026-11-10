@@ -3,4 +3,6 @@ title = 'Configuration file of pymodaq_plugins_tablestable'
 [tfp1]
 port = 'MOCK'  # serial port receiving the GHOST output (COM6 on the setup computer), MOCK to replay a recording
 window_factor = 100.0  # the channels of the shutter windows (reference beam) are divided by this factor
-
+mirror_spacing = 3.0  # mm, distance between the mirrors of the interferometer
+wavelength = 660.0  # nm, wavelength of the laser
+scan_amplitude = 600.0  # nm, amplitude of the scan of the mirrors

@@ -7,6 +7,7 @@ from qtpy import QtCore
 from pymodaq_utils.config import GlobalConfig
 from pymodaq_utils.utils import ThreadCommand
 from pymodaq_data.data import DataToExport, Axis
+from pymodaq_data import Q_, ureg
 from pymodaq_gui.parameter import Parameter
 
 from pymodaq.control_modules.viewer_utility_classes import DAQ_Viewer_base, comon_parameters, main
@@ -54,7 +55,19 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
          'tip': 'The channels of the shutter windows (reference beam) are divided by this factor'},
         {'title': 'Channels:', 'name': 'n_channels', 'type': 'int', 'value': 0, 'readonly': True,
          'tip': 'Number of channels per scan, read from the data'},
+        {'title': 'Frequency axis:', 'name': 'frequency', 'type': 'group', 'children': [
+            {'title': 'Mirror spacing (mm):', 'name': 'mirror_spacing', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'mirror_spacing'), 'min': 0.001,
+             'tip': 'Distance between the mirrors of the interferometer'},
+            {'title': 'Wavelength (nm):', 'name': 'wavelength', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'wavelength'), 'min': 1.},
+            {'title': 'Scan amplitude (nm):', 'name': 'scan_amplitude', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'scan_amplitude'), 'min': 0.001},
+            {'title': 'Half range (GHz):', 'name': 'half_range', 'type': 'float', 'value': 0., 'readonly': True,
+             'tip': 'The spectrum goes from -half range to +half range: (c / 2 spacing) * (amplitude / wavelength)'},
+        ]},
     ]
+    
 
     def ini_attributes(self):
         self.controller: TFP1Ghost = None
@@ -94,8 +107,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
                 self.controller = None
             return str(e), False
 
-        self.settings.child('n_channels').setValue(scan.n_channels)
-        self.x_axis = Axis('Channel', units='', data=np.arange(scan.n_channels), index=0)
+        self.update_axis(scan.n_channels)
         self.dte_signal_temp.emit(DataToExport('TFP1', data=[
             DataFromPlugins(name='TFP1', data=[np.zeros(scan.n_channels)], dim='Data1D',
                             labels=['Spectrum'], units='count', axes=[self.x_axis])]))
@@ -107,6 +119,20 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         if self.is_master and self.controller is not None:
             self.controller.close()
 
+    def update_axis(self, n_channels: int):
+        """Build the frequency axis, from -X to +X GHz with X = (c / 2 spacing) * (amplitude / wavelength)
+
+        The zero frequency is in the middle of the scan (channel n_channels / 2), and the frequency increases with the
+        channel number.
+        """
+        frequency = self.settings.child('frequency')
+        half_range = (ureg.speed_of_light / (2 * Q_(frequency['mirror_spacing'], 'mm'))
+                      * Q_(frequency['scan_amplitude'], 'nm') / Q_(frequency['wavelength'], 'nm')).to('GHz').magnitude
+        frequency.child('half_range').setValue(half_range)
+        self.settings.child('n_channels').setValue(n_channels)
+        self.x_axis = Axis('Frequency', units='GHz', index=0,
+                           data=(np.arange(n_channels) - n_channels / 2) * 2 * half_range / n_channels)
+        
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
 
@@ -136,8 +162,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     def _emit_scan(self, scan):
         """Emit one scan as a spectrum, the channels of the shutter windows divided by the window factor"""
         if scan.n_channels != self.x_axis.size:  # the number of channels was changed on the control unit
-            self.settings.child('n_channels').setValue(scan.n_channels)
-            self.x_axis = Axis('Channel', units='', data=np.arange(scan.n_channels), index=0)
+            self.update_axis(scan.n_channels)
         spectrum = scan.counts.astype(float)
         spectrum[scan.shutter] /= self.settings['window_factor']
         self.dte_signal.emit(DataToExport('TFP1', data=[
