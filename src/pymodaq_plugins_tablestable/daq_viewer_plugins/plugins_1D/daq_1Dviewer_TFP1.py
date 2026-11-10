@@ -1,54 +1,84 @@
-import numpy as np
+from pathlib import Path
+import time
 
+import numpy as np
+from qtpy import QtCore
+
+from pymodaq_utils.config import GlobalConfig
 from pymodaq_utils.utils import ThreadCommand
 from pymodaq_data.data import DataToExport, Axis
+from pymodaq_data import Q_, ureg
 from pymodaq_gui.parameter import Parameter
 
 from pymodaq.control_modules.viewer_utility_classes import DAQ_Viewer_base, comon_parameters, main
 from pymodaq.utils.data import DataFromPlugins
 
-#  TODO:
-#  Replace the following fake import with the import of the real Python wrapper of your instrument. Here we suppose that
-#  the wrapper is in the hardware directory, but it could come from an external librairy like pylablib or pymeasure.
-from pymodaq_plugins_template.hardware.python_wrapper_file_of_your_instrument import PythonWrapperObjectOfYourInstrument
+from pymodaq_plugins_tablestable.hardware.ghost import TFP1Ghost, ReplayPort
+from pymodaq_plugins_tablestable.utils import Config as PluginConfig
 
+config = GlobalConfig()
+REPLAY_FILE = Path(__file__).parents[2].joinpath('resources', 'tfp1_replay.bin')
+SCAN_TIMEOUT = 5.  # s, much longer than a scan cycle (about 0.7 s for 512 channels)
+FREQUENCY_SETTINGS = ('mirror_spacing', 'wavelength', 'scan_amplitude')  # saved in the configuration when changed
 
 class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
-    """ Instrument plugin class for a 1D viewer.
-    
-    This object inherits all functionalities to communicate with PyMoDAQ’s DAQ_Viewer module through inheritance via
-    DAQ_Viewer_base. It makes a bridge between the DAQ_Viewer module and the Python wrapper of a particular instrument.
+    """PyMoDAQ 1D viewer for a TFP-1 tandem Fabry-Perot interferometer (The Table Stable, formerly JRS).
 
-    TODO Complete the docstring of your plugin with:
-        * The set of instruments that should be compatible with this instrument plugin.
-        * With which instrument it has actually been tested.
-        * The version of PyMoDAQ during the test.
-        * The version of the operating system.
-        * Installation instructions: what manufacturer’s drivers should be installed to make it run?
+    The plugin reads the photon counts that the control unit of the TFP-1 sends on its RS-232 output for the GHOST
+    software (one-way link, 57600 baud, 8N1, see ``hardware/ghost.py``). Nothing is sent to the control unit: the plugin
+    cannot change any setting of the interferometer, and GHOST can keep running on a second serial port connected
+    through a Y cable.
+
+    Each acquisition returns the first complete scan starting after the request, in counts per channel, so that the
+    scans of a point of a map are all taken once the stage has stopped. Averaging over several scans is left to
+    PyMoDAQ (Naverage, live averaging). The channels of the shutter windows (reference beam) are divided by the window
+    factor, to keep the reference peak visible without crushing the spectrum. The spectrum is plotted on a frequency axis, from -X to +X GHz with X = (c / 2L) * (scan amplitude / wavelength), L being the mirror spacing; these three settings are kept in the user configuration file. With the port set to MOCK, the plugin
+    replays a recording shipped with the package, so that it can be used without the instrument.
+
+    Compatible instruments: TFP-1 control units with the GHOST serial output. The TFP-2 should also work if its
+    control unit has the same output (untested).
+    Tested with: a TFP-1 in tandem mode (512 channels) on a native RS-232 port, PyMoDAQ 5.3.10, Python 3.12, Windows 11.
+    Installation: no manufacturer driver is needed, only ``pyserial``. The serial port is set in the configuration file
+    of the plugin (``config_tablestable.toml``, section ``[tfp1]``).
+    Usage: the plugin only reads the data. The user remains responsible for the alignment and the stabilisation of the
+    interferometer, with the control unit and the software of the manufacturer.
 
     Attributes:
     -----------
-    controller: object
-        The particular object that allow the communication with the hardware, in general a python wrapper around the
-         hardware library.
-         
-    # TODO add your particular attributes here if any
-
+    controller: TFP1Ghost
+        Wrapper of the serial output of the control unit
+    x_axis: Axis
+        Channel axis, rebuilt when the number of channels is changed on the control unit
     """
-    params = comon_parameters+[
-        ## TODO for your custom plugin
-        # elements to be added here as dicts in order to control your custom stage
-        ############
-        ]
+    params = comon_parameters + [
+        {'title': 'Serial port:', 'name': 'port', 'type': 'str', 'value': config('tablestable', 'tfp1', 'port'),
+         'tip': 'Serial port receiving the GHOST output (COM6...), MOCK to replay a recording'},
+        {'title': 'Window factor:', 'name': 'window_factor', 'type': 'float',
+         'value': config('tablestable', 'tfp1', 'window_factor'), 'min': 1.,
+         'tip': 'The channels of the shutter windows (reference beam) are divided by this factor'},
+        {'title': 'Channels:', 'name': 'n_channels', 'type': 'int', 'value': 0, 'readonly': True,
+         'tip': 'Number of channels per scan, read from the data'},
+        {'title': 'Frequency axis:', 'name': 'frequency', 'type': 'group', 'children': [
+            {'title': 'Mirror spacing (mm):', 'name': 'mirror_spacing', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'mirror_spacing'), 'min': 0.001,
+             'tip': 'Distance between the mirrors of the interferometer'},
+            {'title': 'Wavelength (nm):', 'name': 'wavelength', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'wavelength'), 'min': 1.},
+            {'title': 'Scan amplitude (nm):', 'name': 'scan_amplitude', 'type': 'float',
+             'value': config('tablestable', 'tfp1', 'scan_amplitude'), 'min': 0.001},
+            {'title': 'Half range (GHz):', 'name': 'half_range', 'type': 'float', 'value': 0., 'readonly': True,
+             'tip': 'The spectrum goes from -half range to +half range: (c / 2 spacing) * (amplitude / wavelength)'},
+        ]},
+    ]
+    
 
     def ini_attributes(self):
-        #  TODO declare the type of the wrapper (and assign it to self.controller) you're going to use for easy
-        #  autocompletion
-        self.controller: PythonWrapperObjectOfYourInstrument = None
-
-        # TODO declare here attributes you want/need to init with a default value
-
-        self.x_axis = None
+        self.controller: TFP1Ghost = None
+        self.x_axis: Axis = None
+        self._grab_start = 0.
+        self._timer = QtCore.QTimer()  # checks every 50 ms whether a scan is complete, during an acquisition
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._check_scan)
 
     def ini_detector(self, controller=None):
         """Detector communication initialization
@@ -66,41 +96,46 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
             False if initialization failed otherwise True
         """
 
-        raise NotImplementedError  # TODO when writing your own plugin remove this line and modify the one below
         if self.is_master:
-            self.controller = PythonWrapperObjectOfYourInstrument()  #instantiate you driver with whatever arguments are needed
-            self.controller.open_communication() # call eventual methods
-            initialized = self.controller.a_method_or_atttribute_to_check_if_init()  # TODO
+            port = ReplayPort(REPLAY_FILE) if self.settings['port'] == 'MOCK' else self.settings['port']
+            self.controller = TFP1Ghost(port)
         else:
             self.controller = controller
-            initialized = True
 
-        ## TODO for your custom plugin
-        # get the x_axis (you may want to to this also in the commit settings if x_axis may have changed
-        data_x_axis = self.controller.your_method_to_get_the_x_axis()  # if possible
-        self.x_axis = Axis(data=data_x_axis, label='', units='', index=0)
+        try:
+            scan = self.controller.wait_scan(timeout=5.)
+        except TimeoutError as e:
+            if self.is_master:  # free the port, so that a new initialization can open it again
+                self.controller.close()
+                self.controller = None
+            return str(e), False
 
-        # TODO for your custom plugin. Initialize viewers pannel with the future type of data
-        self.dte_signal_temp.emit(DataToExport(name='myplugin',
-                                               data=[DataFromPlugins(name='Mock1',
-                                                                     data=[np.array([0., 0., ...]),
-                                                                           np.array([0., 0., ...])],
-                                                                     dim='Data1D', labels=['Mock1', 'label2'],
-                                                                     axes=[self.x_axis])]))
-
-        info = "Whatever info you want to log"
-        return info, initialized
+        self.update_axis(scan.n_channels)
+        self.dte_signal_temp.emit(DataToExport('TFP1', data=[
+            DataFromPlugins(name='TFP1', data=[np.zeros(scan.n_channels)], dim='Data1D',
+                            labels=['Spectrum'], units='count', axes=[self.x_axis])]))
+        return f'{scan.n_channels} channels, {"tandem" if scan.tandem else "alignment"} mode', True
 
     def close(self):
         """Terminate the communication protocol"""
-        ## TODO for your custom plugin
-        raise NotImplementedError  # when writing your own plugin remove this line
-        # only the master owns the controller (a slave must not close the shared one) and ini_stage/ini_detector may
-        # have failed before creating it, so close can be called while self.controller is still None
+        # only the master owns the controller, and ini_detector may have failed before creating it
         if self.is_master and self.controller is not None:
-            #  self.controller.your_method_to_terminate_the_communication()  # when writing your own plugin replace this line
-            ...
+            self.controller.close()
 
+    def update_axis(self, n_channels: int):
+        """Build the frequency axis, from -X to +X GHz with X = (c / 2 spacing) * (amplitude / wavelength)
+
+        As in GHOST, the zero frequency is on channel n_channels / 2 (kept there by the stabilisation of the reference
+        peak) and the step is 2X / (n_channels - 1).
+        """
+        frequency = self.settings.child('frequency')
+        half_range = (ureg.speed_of_light / (2 * Q_(frequency['mirror_spacing'], 'mm'))
+                      * Q_(frequency['scan_amplitude'], 'nm') / Q_(frequency['wavelength'], 'nm')).to('GHz').magnitude
+        frequency.child('half_range').setValue(half_range)
+        self.settings.child('n_channels').setValue(n_channels)
+        self.x_axis = Axis('Frequency', units='GHz', index=0,
+                              data=(np.arange(n_channels) - n_channels / 2) * 2 * half_range / (n_channels - 1))
+        
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
 
@@ -112,33 +147,34 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         kwargs: dict
             others optionals arguments
         """
-        ## TODO for your custom plugin: you should choose EITHER the synchrone or the asynchrone version following
+        self.controller.restart()  # the scan returned will be the first one starting after this call
+        self._grab_start = time.monotonic()
+        self._timer.start()
 
-        ##synchrone version (blocking function)
-        data_tot = self.controller.your_method_to_start_a_grab_snap()
-        self.dte_signal.emit(DataToExport('myplugin',
-                                          data=[DataFromPlugins(name='Mock1', data=data_tot,
-                                                                dim='Data1D', labels=['dat0', 'data1'],
-                                                                axes=[self.x_axis])]))
+    def _check_scan(self):
+        """Called by the timer during an acquisition: emit the first complete scan, or give up after a timeout"""
+        scans = self.controller.read_scans()
+        if scans:
+            self._timer.stop()
+            self._emit_scan(scans[0])
+        elif time.monotonic() - self._grab_start > SCAN_TIMEOUT:
+            self._timer.stop()
+            self.emit_status(ThreadCommand('Update_Status',
+                                           [f'No complete scan within {SCAN_TIMEOUT} s: is the TFP-1 scanning?']))
 
-        ##asynchrone version (non-blocking function with callback)
-        self.controller.your_method_to_start_a_grab_snap(self.callback)
-        #########################################################
-
-    def callback(self):
-        """optional asynchrone method called when the detector has finished its acquisition of data"""
-        data_tot = self.controller.your_method_to_get_data_from_buffer()
-        self.dte_signal.emit(DataToExport('myplugin',
-                                          data=[DataFromPlugins(name='Mock1', data=data_tot,
-                                                                dim='Data1D', labels=['dat0', 'data1'])]))
+    def _emit_scan(self, scan):
+        """Emit one scan as a spectrum, the channels of the shutter windows divided by the window factor"""
+        if scan.n_channels != self.x_axis.size:  # the number of channels was changed on the control unit
+            self.update_axis(scan.n_channels)
+        spectrum = scan.counts.astype(float)
+        spectrum[scan.shutter] /= self.settings['window_factor']
+        self.dte_signal.emit(DataToExport('TFP1', data=[
+            DataFromPlugins(name='TFP1', data=[spectrum], dim='Data1D', labels=['Spectrum'], units='count',
+                            axes=[self.x_axis])]))
 
     def stop(self):
-        """Stop the current grab hardware wise if necessary"""
-        ## TODO for your custom plugin
-        raise NotImplementedError  # when writing your own plugin remove this line
-        self.controller.your_method_to_stop_acquisition()  # when writing your own plugin replace this line
-        self.emit_status(ThreadCommand('Update_Status', ['Some info you want to log']))
-        ##############################
+        """Stop the current acquisition: nothing to tell the control unit, which keeps scanning"""
+        self._timer.stop()
         return ''
 
     def commit_settings(self, param: Parameter):
@@ -149,11 +185,16 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         param: Parameter
             A given parameter (within detector_settings) whose value has been changed by the user
         """
-        ## TODO for your custom plugin
-        if param.name() == "a_parameter_you've_added_in_self.params":
-           self.controller.your_method_to_apply_this_param_change()
-#        elif ...
-        ##
+        # the window factor is read at each scan, nothing to do for it
+        if param.name() in FREQUENCY_SETTINGS:
+            plugin_config = PluginConfig()
+            plugin_config['tfp1', param.name()] = param.value()
+            plugin_config.save()  # in the user configuration file, so that the value is kept for the next session
+            if self.x_axis is not None:
+                self.update_axis(self.x_axis.size)  # used from the next scan on
+        elif param.name() == 'port':
+            self.emit_status(ThreadCommand('Update_Status', ['The new serial port will be used at the next '
+                                                             'initialization']))
 
 
 if __name__ == '__main__':
