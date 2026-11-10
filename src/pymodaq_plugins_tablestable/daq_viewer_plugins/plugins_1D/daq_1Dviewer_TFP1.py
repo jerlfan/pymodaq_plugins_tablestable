@@ -14,11 +14,12 @@ from pymodaq.control_modules.viewer_utility_classes import DAQ_Viewer_base, como
 from pymodaq.utils.data import DataFromPlugins
 
 from pymodaq_plugins_tablestable.hardware.ghost import TFP1Ghost, ReplayPort
+from pymodaq_plugins_tablestable.utils import Config as PluginConfig
 
 config = GlobalConfig()
 REPLAY_FILE = Path(__file__).parents[2].joinpath('resources', 'tfp1_replay.bin')
 SCAN_TIMEOUT = 5.  # s, much longer than a scan cycle (about 0.7 s for 512 channels)
-
+FREQUENCY_SETTINGS = ('mirror_spacing', 'wavelength', 'scan_amplitude')  # saved in the configuration when changed
 
 class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
     """PyMoDAQ 1D viewer for a TFP-1 tandem Fabry-Perot interferometer (The Table Stable, formerly JRS).
@@ -183,7 +184,13 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
             A given parameter (within detector_settings) whose value has been changed by the user
         """
         # the window factor is read at each scan, nothing to do for it
-        if param.name() == 'port':
+        if param.name() in FREQUENCY_SETTINGS:
+            plugin_config = PluginConfig()
+            plugin_config['tfp1', param.name()] = param.value()
+            plugin_config.save()  # in the user configuration file, so that the value is kept for the next session
+            if self.x_axis is not None:
+                self.update_axis(self.x_axis.size)  # used from the next scan on
+        elif param.name() == 'port':
             self.emit_status(ThreadCommand('Update_Status', ['The new serial port will be used at the next '
                                                              'initialization']))
 
