@@ -70,12 +70,13 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
              'tip': 'The spectrum goes from -half range to +half range: (c / 2 spacing) * (amplitude / wavelength)'},
         ]},
     ]
-    
+
 
     def ini_attributes(self):
         self.controller: TFP1Ghost = None
         self.x_axis: Axis = None
         self._grab_start = 0.
+        self._pending_n_channels = None  # length seen once, waiting for confirmation by the next scan
         self._timer = QtCore.QTimer()  # checks every 50 ms whether a scan is complete, during an acquisition
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._check_scan)
@@ -135,7 +136,7 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         self.settings.child('n_channels').setValue(n_channels)
         self.x_axis = Axis('Frequency', units='GHz', index=0,
                               data=(np.arange(n_channels) - n_channels / 2) * 2 * half_range / (n_channels - 1))
-        
+
     def grab_data(self, Naverage=1, **kwargs):
         """Start a grab from the detector
 
@@ -151,21 +152,37 @@ class DAQ_1DViewer_TFP1(DAQ_Viewer_base):
         self._grab_start = time.monotonic()
         self._timer.start()
 
+    def _accept_length(self, n_channels: int) -> bool:
+        """True if a scan of n_channels channels can be emitted
+
+        A length different from the current axis is accepted only if two consecutive scans have it: a change of the
+        number of channels on the control unit lasts, while a corrupted scan (bytes lost) is isolated.
+        """
+        if n_channels == self.x_axis.size:
+            self._pending_n_channels = None
+            return True
+        if n_channels == self._pending_n_channels:  # confirmed by a second scan: real change on the control unit
+            self._pending_n_channels = None
+            self.update_axis(n_channels)
+            return True
+        self._pending_n_channels = n_channels
+        return False
+
     def _check_scan(self):
-        """Called by the timer during an acquisition: emit the first complete scan, or give up after a timeout"""
-        scans = self.controller.read_scans()
-        if scans:
-            self._timer.stop()
-            self._emit_scan(scans[0])
-        elif time.monotonic() - self._grab_start > SCAN_TIMEOUT:
+        """Called by the timer during an acquisition: emit the first complete scan of accepted length, or give up after
+        a timeout"""
+        for scan in self.controller.read_scans():
+            if self._accept_length(scan.n_channels):
+                self._timer.stop()
+                self._emit_scan(scan)
+                return
+        if time.monotonic() - self._grab_start > SCAN_TIMEOUT:
             self._timer.stop()
             self.emit_status(ThreadCommand('Update_Status',
                                            [f'No complete scan within {SCAN_TIMEOUT} s: is the TFP-1 scanning?']))
 
     def _emit_scan(self, scan):
         """Emit one scan as a spectrum, the channels of the shutter windows divided by the window factor"""
-        if scan.n_channels != self.x_axis.size:  # the number of channels was changed on the control unit
-            self.update_axis(scan.n_channels)
         spectrum = scan.counts.astype(float)
         spectrum[scan.shutter] /= self.settings['window_factor']
         self.dte_signal.emit(DataToExport('TFP1', data=[
