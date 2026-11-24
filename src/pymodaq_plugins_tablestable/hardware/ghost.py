@@ -110,7 +110,9 @@ class ReplayPort:
     """
 
     def __init__(self, path: Union[str, Path], idle_interval: float = 0.01):
-        self._data = np.frombuffer(Path(path).read_bytes(), dtype=np.uint8)
+        data = np.frombuffer(Path(path).read_bytes(), dtype=np.uint8)
+        idle = np.flatnonzero(data == IDLE)
+        self._data = data[idle[0]: idle[-1] + 1]  # start and end in a retrace, so that the loop never splices two scans
         byte_time = 10 / BAUDRATE  # 10 bits per byte (start, 8 data, stop)
         self._times = np.cumsum(np.where(self._data == IDLE, idle_interval, byte_time))  # arrival of each byte
         self._start = time.monotonic()
